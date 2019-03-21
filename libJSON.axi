@@ -1,6 +1,7 @@
-PROGRAM_NAME='libJSON'
+PROGRAM_NAME='libJSON v2_0'
 // ---------------------------------------------------------------------------------------------------------------------
 // LIBRARY:	libJSON
+// AUTHOR:	https://github.com/sentry07
 // PURPOSE:	To provide functions to verify, parse, and build JSON encoded objects
 //
 // THIS LIBRARY RELIES ON THE FACT THAT FUNCTION PARAMETERS ARE BYREF, SO MOST DATA IS RETURNED THROUGH PARAMETERS
@@ -31,48 +32,59 @@ PROGRAM_NAME='libJSON'
 //   * Null 									(null, non-enclosed)
 //
 // ---------------------------------------------------------------------------------------------------------------------
+// Version Notes:
+// v2_0:	A full rewrite from the ground up to make using JSON data easier and parse properly instead of the hacky
+//		stuff I was doing before
+// v1_0:	First version that was very hard to use and relied on all values to be strings
+// ---------------------------------------------------------------------------------------------------------------------
 // User Structures:
 //
 //	STRUCTURE _JSON_Object
 //	{
-//	    INTEGER	Count					// Number of Key:Value pairs in this object
-//	    _KVPair	KV[_JSON_MaxPairs]			// The actual Key:Value data
-//		STRUCTURE _KVPair
-//		{
-//		    CHAR	K[_JSON_KeySize]		// Key name
-//		    CHAR	V[_JSON_ValueSize]		// Value data
-//		    INTEGER	nType				// Value type
-//		}
+//		INTEGER	Count							// Number of Key:Value pairs in this object
+//		_KVPair	KV[_JSON_MaxPairs]				// The actual Key:Value data
+//			STRUCTURE _KVPair
+//			{
+//				CHAR	K[_JSON_KeySize]			// Key name
+//				CHAR	V[_JSON_ValueSize]			// Value data
+//				INTEGER	nType						// Value type
+//			}
 //	}
 //
 //	STRUCTURE _JSON_Array
 //	{
-//	    INTEGER	Count					// Number of values stored in array
-//	    _Value	List[_JSON_ArraySize]			// Value storage
-//	    	STRUCTURE _Value
-//	    	{
-//		    CHAR	Value[_JSON_ValueSize]		// Actual value
-//		    INTEGER	nType				// Value type
-//		}
+//		INTEGER	Count							// Number of values stored in array
+//		_Value	List[_JSON_ArraySize]			// Value storage
+//			STRUCTURE _Value
+//			{
+//				CHAR	Value[_JSON_ValueSize]		// Actual value
+//				INTEGER	nType						// Value type
+//			}
 //	}
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Functions:
-//    DEFINE_FUNCTION CHAR[] 	_JSON_TrimWhiteSpace	(CHAR cInput[])
-//    DEFINE_FUNCTION INTEGER 	JSON_Validate		(CHAR cInput[],CHAR cCleaned[])
-//    DEFINE_FUNCTION INTEGER 	JSON_ParseObject	(CHAR cInput[],_JSON_Object jObject)
-//    DEFINE_FUNCTION INTEGER 	JSON_ParseArray		(CHAR cInput[],_JSON_Array jReturn)
-//    DEFINE_FUNCTION INTEGER 	JSON_HasKey		(_JSON_Object jObject,CHAR cKeyName[])
-//    DEFINE_FUNCTION CHAR[] 	JSON_GetValue		(_JSON_Object jObject,CHAR cKeyName[])
-//    DEFINE_FUNCTION SINTEGER 	JSON_SetValue		(_JSON_Object jObject,CHAR cKeyName[],CHAR cValue[],INTEGER nType)
-//    DEFINE_FUNCTION SINTEGER 	JSON_DeleteKey		(_JSON_Object jObject,CHAR cKeyName[])
-//    DEFINE_FUNCTION INTEGER 	JSON_GetType		(_JSON_Object jObject,CHAR cKeyName[])
-//    DEFINE_FUNCTION CHAR[]	JSON_ObjectToString	(_JSON_Object jObject)
-//    DEFINE_FUNCTION CHAR[]	JSON_ArrayToString	(_JSON_Array jArray)
-//    DEFINE_FUNCTION INTEGER 	JSON_ClearObject	(_JSON_Object jObject)
-//    DEFINE_FUNCTION CHAR[]	NumArrayToJSON		(SLONG nArray[],INTEGER nLength)
-//    DEFINE_FUNCTION CHAR[]	StringArrayToJSON	(CHAR cArray[][],INTEGER nLength)
+//	DEFINE_FUNCTION CHAR[] 		_JSON_TrimWhiteSpace	(CHAR cInput[])
+//	DEFINE_FUNCTION INTEGER 	JSON_Validate			(CHAR cInput[],CHAR cCleaned[])
+//	DEFINE_FUNCTION INTEGER 	JSON_ParseObject		(CHAR cInput[],_JSON_Object jObject)
+//	DEFINE_FUNCTION INTEGER 	JSON_ParseArray			(CHAR cInput[],_JSON_Array jReturn)
+//	DEFINE_FUNCTION INTEGER 	JSON_HasKey				(_JSON_Object jObject,CHAR cKeyName[])
+//	DEFINE_FUNCTION CHAR[] 		JSON_GetValue			(_JSON_Object jObject,CHAR cKeyName[])
+//	DEFINE_FUNCTION SINTEGER 	JSON_SetValue			(_JSON_Object jObject,CHAR cKeyName[],CHAR cValue[],INTEGER nType)
+//	DEFINE_FUNCTION SINTEGER 	JSON_DeleteKey			(_JSON_Object jObject,CHAR cKeyName[])
+//	DEFINE_FUNCTION INTEGER 	JSON_GetType			(_JSON_Object jObject,CHAR cKeyName[])
+//	DEFINE_FUNCTION CHAR[]		JSON_ObjectToString		(_JSON_Object jObject)
+//	DEFINE_FUNCTION CHAR[]		JSON_ArrayToString		(_JSON_Array jArray)
+//	DEFINE_FUNCTION INTEGER 	JSON_ClearObject		(_JSON_Object jObject)
+//	DEFINE_FUNCTION CHAR[]		NumArrayToJSON			(SLONG nArray[],INTEGER nLength)
+//	DEFINE_FUNCTION CHAR[]		StringArrayToJSON		(CHAR cArray[][],INTEGER nLength)
 // ---------------------------------------------------------------------------------------------------------------------
+
+#IF_NOT_DEFINED libFile_v1_3_Met		// libFile v1_3 is needed for WriteFileFromString function
+INCLUDE 'libFile v1_3'
+#END_IF
+
+
 
 // ---------------------------------------------------------------------------------------------------------------------
 // JSON Constants
@@ -88,7 +100,7 @@ INTEGER _JSON_InputSize		= 20000			// Size of buffer for JSON string
 INTEGER _JSON_MaxPairs		= 30			// Max number of Key:Value pairs in the _JSON_Object Structure; adjust this if you get OutOfMemory error
 INTEGER _JSON_KeySize		= 20			// String size for all Keys
 INTEGER _JSON_ValueSize		= 2000			// String size for all Values
-INTEGER _JSON_ArraySize		= 30			// Max number of values in _JSON_Array
+INTEGER _JSON_ArraySize		= 64			// Max number of values in _JSON_Array
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Data type constants
@@ -115,7 +127,7 @@ CHAR _JSON_Types[][10] = {
 SINTEGER _JSON_Success		= 0
 SINTEGER _JSON_KeyNotFound	= -1		// GetValue, DeleteKey
 SINTEGER _JSON_OutOfMemory	= -2		// SetValue
-
+SINTEGER _JSON_InvalidValue = -3		// SetValue
 
 // ---------------------------------------------------------------------------------------------------------------------
 // JSON Structures
@@ -125,28 +137,28 @@ DEFINE_TYPE
 STRUCTURE _Value
 {
 	CHAR	Value[_JSON_ValueSize]			// Actual value
-	INTEGER	nType					// Value type
+	INTEGER	nType							// Value type
 }
 
 STRUCTURE _JSON_Array
 {
-	INTEGER	Count					// Number of values stored in array
+	INTEGER	Count							// Number of values stored in array
 	_Value	List[_JSON_ArraySize]			// Value storage
 }
 
 // Basic Key:Value pair
 STRUCTURE _KVPair
 {
-	CHAR	K[_JSON_KeySize]			// Key name
-	CHAR	V[_JSON_ValueSize]			// Value data
-	INTEGER	nType					// Value type
+	CHAR	K[_JSON_KeySize]				// Key name
+	CHAR	V[_JSON_ValueSize]				// Value data
+	INTEGER	nType							// Value type
 }
 
 // The actual object that will be returned
 STRUCTURE _JSON_Object
 {
-	INTEGER	Count					// Number of Key:Value pairs in this object
-	_KVPair	KV[_JSON_MaxPairs]			// The actual Key:Value data
+	INTEGER	Count							// Number of Key:Value pairs in this object
+	_KVPair	KV[_JSON_MaxPairs]				// The actual Key:Value data
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -163,11 +175,11 @@ VOLATILE INTEGER nJSONDebug = 0
 DEFINE_FUNCTION CHAR[_JSON_InputSize] _JSON_TrimWhiteSpace(CHAR cInput[])
 // ---------------------------------------------------------------------------------------------------------------------
 // FUNCTION:	_JSON_TrimWhiteSpace
-// PURPOSE:	Special version of _TrimWhiteSpace with bigger return array size
-//		Trims all whitespace characters from the beginning and end of string
+// PURPOSE:		Special version of _TrimWhiteSpace with bigger return array size
+//				Trims all whitespace characters from the beginning and end of string
 //
-// EXAMPLE:	cReturn = _JSON_TrimWhiteSpace('            Hello     ')
-// RETURNS:	'Hello'
+// EXAMPLE:		cReturn = _JSON_TrimWhiteSpace('			Hello	 ')
+// RETURNS:		'Hello'
 // ---------------------------------------------------------------------------------------------------------------------
 {
 	STACK_VAR CHAR cTempInput[_JSON_InputSize]
@@ -194,24 +206,24 @@ DEFINE_FUNCTION CHAR[_JSON_InputSize] _JSON_TrimWhiteSpace(CHAR cInput[])
 DEFINE_FUNCTION INTEGER JSON_Validate(CHAR cInput[],CHAR cCleaned[])
 // ---------------------------------------------------------------------------------------------------------------------
 // FUNCTION: 	JSON_Validate
-// PURPOSE:	Parses cInput to validate that it is a valid JSON structure; this also cleans out all unnecessary
-//		whitespace characters and returns the cleaned string in the cCleaned parameter
+// PURPOSE:		Parses cInput to validate that it is a valid JSON structure; this also cleans out all unnecessary
+//				whitespace characters and returns the cleaned string in the cCleaned parameter
 //
-// EXAMPLE:	nResult = JSON_Verify(cDeviceBuffer)
-// RETURNS:	1 if valid, 0 if not; cCleaned is updated with compacted text
+// EXAMPLE:		nResult = JSON_Verify(cDeviceBuffer,cValidated)
+// RETURNS:		1 if valid, 0 if not; cValidated is updated with compacted text
 // ---------------------------------------------------------------------------------------------------------------------
 {
 	STACK_VAR CHAR cTempInput[_JSON_InputSize]		// Temporary string storage
 	STACK_VAR CHAR cTempOutput[_JSON_InputSize]		// Temporary string storage
-	STACK_VAR INTEGER F1				// Loop over bytes in string
-	STACK_VAR INTEGER nFind				// Find location
-	STACK_VAR INTEGER bInKey				// Currently in the key
-	STACK_VAR INTEGER bInValue				// Currently in the value
-	STACK_VAR INTEGER bEndOfValue			// Value should have ended
-	STACK_VAR INTEGER bInObj				// Currently in an object
-	STACK_VAR INTEGER bInArray				// Currently in an array
-	STACK_VAR INTEGER BrObj				// Current number of open object brackets
-	STACK_VAR INTEGER BrArray				// Current number of open array brackets
+	STACK_VAR INTEGER F1							// Loop over bytes in string
+	STACK_VAR INTEGER nFind							// Find location
+	STACK_VAR INTEGER bInKey						// Currently in the key
+	STACK_VAR INTEGER bInValue						// Currently in the value
+	STACK_VAR INTEGER bEndOfValue					// Value should have ended
+	STACK_VAR INTEGER bInObj						// Currently in an object
+	STACK_VAR INTEGER bInArray						// Currently in an array
+	STACK_VAR INTEGER BrObj							// Current number of open object brackets
+	STACK_VAR INTEGER BrArray						// Current number of open array brackets
 	
 	cTempInput = _JSON_TrimWhiteSpace(cInput)
 	F1 = 1
@@ -448,31 +460,31 @@ DEFINE_FUNCTION INTEGER JSON_Validate(CHAR cInput[],CHAR cCleaned[])
 DEFINE_FUNCTION INTEGER JSON_ParseObject(CHAR cInput[],_JSON_Object jObject)
 // ---------------------------------------------------------------------------------------------------------------------
 // FUNCTION: 	JSON_ParseObject
-// PURPOSE:	Parses cInput and puts the Key:Value pairs in the _JSON_Object that is passed in the second parameter
+// PURPOSE:		Parses cInput and puts the Key:Value pairs in the _JSON_Object that is passed in the second parameter
 //
-// EXAMPLE:	nResult = JSON_ParseObject(cDeviceBuffer,jObject)
-// RETURNS:	number of key:value pairs parsed; jObject has the parsed data
+// EXAMPLE:		nResult = JSON_ParseObject(cDeviceBuffer,jObject)
+// RETURNS:		number of key:value pairs parsed; jObject has the parsed data
 // ---------------------------------------------------------------------------------------------------------------------
 {
-	STACK_VAR _JSON_Object jReturn			// Local storage of JSON data
+	STACK_VAR _JSON_Object jReturn					// Local storage of JSON data
 	STACK_VAR CHAR cTempInput[_JSON_InputSize]		// Temporary string storage
 	STACK_VAR CHAR cValidated[_JSON_InputSize]		// Validated JSON data
-	STACK_VAR CHAR cTemp[5000]				// Temporary string storage
-	STACK_VAR INTEGER nReturn				// Return from the validator
-	STACK_VAR INTEGER F1				// Loop over bytes in string
-	STACK_VAR INTEGER nFind				// Find location
-	STACK_VAR INTEGER bInKey				// Currently in the key
-	STACK_VAR INTEGER bInValue				// Currently in the value
-	STACK_VAR INTEGER bEndOfValue			// Value should have ended
-	STACK_VAR INTEGER bInObj				// Currently in an object
-	STACK_VAR INTEGER bInChildObj			// Currently in a child object
-	STACK_VAR INTEGER bInArray				// Currently in an array
-	STACK_VAR INTEGER BrObj				// Current number of open object brackets
-	STACK_VAR INTEGER BrChildObj			// Current number of open child object brackets
-	STACK_VAR INTEGER nChildObjStart			// Start of the current child object
-	STACK_VAR INTEGER BrArray				// Current number of open array brackets
-	STACK_VAR INTEGER BrArrayStart			// Start of the current array
-	STACK_VAR INTEGER nCurrentKV			// Current KV pair we're processing
+	STACK_VAR CHAR cTemp[5000]						// Temporary string storage
+	STACK_VAR INTEGER nReturn						// Return from the validator
+	STACK_VAR INTEGER F1							// Loop over bytes in string
+	STACK_VAR INTEGER nFind							// Find location
+	STACK_VAR INTEGER bInKey						// Currently in the key
+	STACK_VAR INTEGER bInValue						// Currently in the value
+	STACK_VAR INTEGER bEndOfValue					// Value should have ended
+	STACK_VAR INTEGER bInObj						// Currently in an object
+	STACK_VAR INTEGER bInChildObj					// Currently in a child object
+	STACK_VAR INTEGER bInArray						// Currently in an array
+	STACK_VAR INTEGER BrObj							// Current number of open object brackets
+	STACK_VAR INTEGER BrChildObj					// Current number of open child object brackets
+	STACK_VAR INTEGER nChildObjStart				// Start of the current child object
+	STACK_VAR INTEGER BrArray						// Current number of open array brackets
+	STACK_VAR INTEGER BrArrayStart					// Start of the current array
+	STACK_VAR INTEGER nCurrentKV					// Current KV pair we're processing
 	
 	cTempInput = cInput
 	
@@ -488,8 +500,6 @@ DEFINE_FUNCTION INTEGER JSON_ParseObject(CHAR cInput[],_JSON_Object jObject)
 		{
 			JSON_ClearObject(jObject)
 		}
-		
-		IF (nJSONDebug) WriteFileFromString('/json-valid.txt',cValidated)
 		
 		nCurrentKV = 1
 		F1 = 1
@@ -695,26 +705,26 @@ DEFINE_FUNCTION INTEGER JSON_ParseObject(CHAR cInput[],_JSON_Object jObject)
 
 DEFINE_FUNCTION INTEGER JSON_ParseArray(CHAR cInput[],_JSON_Array jReturn)
 // ---------------------------------------------------------------------------------------------------------------------
-// FUNCTION: 	JSON_GetArrayElement
-// PURPOSE:	Process an array and return the value in the defined index, if found
-//		Must be formatted like JSON: [element,element,element]
+// FUNCTION: 	JSON_ParseArray
+// PURPOSE:		Parses a JSON array string and returns an array object of the values found
+//				Must be formatted like JSON: [element,element,element]
 //
-// EXAMPLE:	cResult = JSON_GetArrayElement(jData,3)
-// RETURNS:	<value of index 3>
+// EXAMPLE:		cResult = JSON_ParseArray(cJSONArray,jParsedArray)
+// RETURNS:		return is number of values in array; jParsedArray is an array object of the values
 // ---------------------------------------------------------------------------------------------------------------------
 {
-	STACK_VAR INTEGER F1				// Normal FOR loop var
-	STACK_VAR INTEGER nFind				// Temp search variable
-	STACK_VAR CHAR cTemp[_JSON_ValueSize]		// Temporary string
+	STACK_VAR INTEGER F1							// Normal FOR loop var
+	STACK_VAR INTEGER nFind							// Temp search variable
+	STACK_VAR CHAR cTemp[_JSON_ValueSize]			// Temporary string
 	STACK_VAR CHAR cTempInput[_JSON_ValueSize]		// Trimmed copy of the input array
-	STACK_VAR _JSON_Array jTempArray			// Temporary array to store the values
-	STACK_VAR INTEGER nValueCount			// Number of values found so far in array
-	STACK_VAR INTEGER bInChildObj			// Currently in a child object
-	STACK_VAR INTEGER bInArray				// Currently in an array
-	STACK_VAR INTEGER BrChildObj			// Current number of open child object brackets
-	STACK_VAR INTEGER nChildObjStart			// Start of the current child object
-	STACK_VAR INTEGER BrArray				// Current number of open array brackets
-	STACK_VAR INTEGER BrArrayStart			// Start of the current array
+	STACK_VAR _JSON_Array jTempArray				// Temporary array to store the values
+	STACK_VAR INTEGER nValueCount					// Number of values found so far in array
+	STACK_VAR INTEGER bInChildObj					// Currently in a child object
+	STACK_VAR INTEGER bInArray						// Currently in an array
+	STACK_VAR INTEGER BrChildObj					// Current number of open child object brackets
+	STACK_VAR INTEGER nChildObjStart				// Start of the current child object
+	STACK_VAR INTEGER BrArray						// Current number of open array brackets
+	STACK_VAR INTEGER BrArrayStart					// Start of the current array
 	
 	// Clean up unnecessary whitespace around array
 	cTempInput = _JSON_TrimWhiteSpace(cInput)
@@ -894,13 +904,13 @@ DEFINE_FUNCTION INTEGER JSON_ParseArray(CHAR cInput[],_JSON_Array jReturn)
 DEFINE_FUNCTION INTEGER JSON_HasKey(_JSON_Object jObject,CHAR cKeyName[])
 // ---------------------------------------------------------------------------------------------------------------------
 // FUNCTION: 	JSON_HasKey
-// PURPOSE:	Iterates through the KV pairs in the JSON object and returns true/false if the key is found or not
+// PURPOSE:		Iterates through the KV pairs in the JSON object and returns true/false if the key is found or not
 //
-// EXAMPLE:	cResult = JSON_HasKey(jData,'RoomName')
-// RETURNS:	<1 or 0>
+// EXAMPLE:		cResult = JSON_HasKey(jData,'RoomName')
+// RETURNS:		<1 or 0>
 // ---------------------------------------------------------------------------------------------------------------------
 {
-	STACK_VAR INTEGER F1				// Normal FOR loop var
+	STACK_VAR INTEGER F1						// Normal FOR loop var
 	
 	FOR (F1 = 1; F1 <= jObject.Count; F1++)
 	{
@@ -915,13 +925,13 @@ DEFINE_FUNCTION INTEGER JSON_HasKey(_JSON_Object jObject,CHAR cKeyName[])
 DEFINE_FUNCTION CHAR[_JSON_ValueSize] JSON_GetValue(_JSON_Object jObject,CHAR cKeyName[])
 // ---------------------------------------------------------------------------------------------------------------------
 // FUNCTION: 	JSON_GetValue
-// PURPOSE:	Iterates through the KV pairs in the JSON object and returns the value of the Key if found
+// PURPOSE:		Iterates through the KV pairs in the JSON object and returns the value of the Key if found
 //
-// EXAMPLE:	cResult = JSON_GetValue(jData,'RoomName')
-// RETURNS:	<value of RoomName>
+// EXAMPLE:		cResult = JSON_GetValue(jData,'RoomName')
+// RETURNS:		<value of RoomName>
 // ---------------------------------------------------------------------------------------------------------------------
 {
-	STACK_VAR INTEGER F1				// Normal FOR loop var
+	STACK_VAR INTEGER F1						// Normal FOR loop var
 	
 	FOR (F1 = 1; F1 <= jObject.Count; F1++)
 	{
@@ -941,14 +951,81 @@ DEFINE_FUNCTION CHAR[_JSON_ValueSize] JSON_GetValue(_JSON_Object jObject,CHAR cK
 DEFINE_FUNCTION SINTEGER JSON_SetValue(_JSON_Object jObject,CHAR cKeyName[],CHAR cValue[],INTEGER nType)
 // ---------------------------------------------------------------------------------------------------------------------
 // FUNCTION: 	JSON_SetValue
-// PURPOSE:	Creates a key, or updates a key, with the specified value and type
+// PURPOSE:		Creates a key, or updates a key, with the specified value and type
 //
-// EXAMPLE:	nResult = JSON_SetValue(jData,'RoomName','Conference Room',_JSON_IsString)
-// RETURNS:	<status code>
+// EXAMPLE:		nResult = JSON_SetValue(jData,'RoomName','Conference Room',_JSON_IsString)
+// RETURNS:		<status code>
 // ---------------------------------------------------------------------------------------------------------------------
 {
-	STACK_VAR INTEGER F1				// Normal FOR loop var
-	
+	STACK_VAR INTEGER F1							// Normal FOR loop var
+	STACK_VAR CHAR cTempValue[_JSON_ValueSize]		// Temporary storage
+	STACK_VAR CHAR cValidValue[_JSON_ValueSize]		// Verified value
+
+	cTempValue = _JSON_TrimWhiteSpace(cValue)
+
+	SWITCH (nType)
+	{
+		CASE _JSON_IsArray:
+		{
+			IF (LEFT_STRING(cTempValue,1) == '[' && RIGHT_STRING(cTempValue,1) == ']')
+			{
+				cValidValue = cTempValue
+			}
+			ELSE
+			{
+				RETURN _JSON_InvalidValue
+			}
+		}
+		CASE _JSON_IsObject:
+		{
+			IF (LEFT_STRING(cTempValue,1) == '{' && RIGHT_STRING(cTempValue,1) == '}')
+			{
+				cValidValue = cTempValue
+			}
+			ELSE
+			{
+				RETURN _JSON_InvalidValue
+			}
+		}
+		CASE _JSON_IsBool:
+		{
+			SELECT
+			{
+				ACTIVE (LOWER_STRING(cTempValue) == 'true' || cTempValue == '1'):			// We'll accept 0 and 1 as false and true
+				{
+					cValidValue = 'true'
+				}
+				ACTIVE (LOWER_STRING(cTempValue) == 'false' || cTempValue == '0'):
+				{
+					cValidValue = 'false'
+				}
+				ACTIVE (1):
+				{
+					RETURN _JSON_InvalidValue
+				}
+			}
+		}
+		CASE _JSON_IsNull:
+		{
+			cValidValue = 'null'
+		}
+		CASE _JSON_IsNumber:
+		{
+			IF (FTOA(ATOF(cTempValue)) == cTempValue)				// Convert string to a float, then back to a string and see if it matches
+			{
+				cValidValue = cTempValue
+			}
+			ELSE
+			{
+				RETURN _JSON_InvalidValue
+			}
+		}
+		CASE _JSON_IsString:
+		{
+			cValidValue = cTempValue
+		}
+	}
+
 	FOR (F1 = 1; F1 <= jObject.Count; F1++)
 	{
 		IF (LOWER_STRING(jObject.KV[F1].K) = LOWER_STRING(cKeyName))
@@ -980,15 +1057,15 @@ DEFINE_FUNCTION SINTEGER JSON_SetValue(_JSON_Object jObject,CHAR cKeyName[],CHAR
 DEFINE_FUNCTION SINTEGER JSON_DeleteKey(_JSON_Object jObject,CHAR cKeyName[])
 // ---------------------------------------------------------------------------------------------------------------------
 // FUNCTION: 	JSON_DeleteKey
-// PURPOSE:	Deletes a key from the object if found
+// PURPOSE:		Deletes a key from the object if found
 //
-// EXAMPLE:	nResult = JSON_DeleteKey(jData,'RoomName')
-// RETURNS:	<status code>
+// EXAMPLE:		nResult = JSON_DeleteKey(jData,'RoomName')
+// RETURNS:		<status code>
 // ---------------------------------------------------------------------------------------------------------------------
 {
-	STACK_VAR INTEGER F1				// Normal FOR loop var
-	STACK_VAR INTEGER nIndex				// Which index matched
-	STACK_VAR _KVPair KV				// Empty KV pair
+	STACK_VAR INTEGER F1						// Normal FOR loop var
+	STACK_VAR INTEGER nIndex					// Which index matched
+	STACK_VAR _KVPair KV						// Empty KV pair
 	
 	FOR (F1 = 1; F1 <= jObject.Count; F1++)
 	{
@@ -1027,13 +1104,13 @@ DEFINE_FUNCTION SINTEGER JSON_DeleteKey(_JSON_Object jObject,CHAR cKeyName[])
 DEFINE_FUNCTION INTEGER JSON_GetType(_JSON_Object jObject,CHAR cKeyName[])
 // ---------------------------------------------------------------------------------------------------------------------
 // FUNCTION: 	JSON_GetType
-// PURPOSE:	Iterates through the KV pairs in the JSON object and returns the type of the value of the Key if found
+// PURPOSE:		Iterates through the KV pairs in the JSON object and returns the type of the value of the Key if found
 //
-// EXAMPLE:	cResult = JSON_GetValueType(jData,'RoomName')
-// RETURNS:	<integer value>
+// EXAMPLE:		cResult = JSON_GetValueType(jData,'RoomName')
+// RETURNS:		<integer value matching _JSON_IsXXXX constants>
 // ---------------------------------------------------------------------------------------------------------------------
 {
-	STACK_VAR INTEGER F1				// Normal FOR loop var
+	STACK_VAR INTEGER F1						// Normal FOR loop var
 	
 	FOR (F1 = 1; F1 <= jObject.Count; F1++)
 	{
@@ -1055,12 +1132,12 @@ DEFINE_FUNCTION CHAR[_JSON_InputSize] JSON_ObjectToString(_JSON_Object jObject)
 // FUNCTION:	JSON_ObjectToString
 // PURPOSE:  	Output a JSON object with the records included in the _JSON_Object parameter
 //
-// EXAMPLE:	JSON_ObjectToString(jData)
-// RETURNS:	<string containing JSON formatted data>
+// EXAMPLE:		JSON_ObjectToString(jData)
+// RETURNS:		<string containing JSON formatted data>
 // ---------------------------------------------------------------------------------------------------------------------
 {
-	STACK_VAR INTEGER F1				// Standard FOR loop variable
-	STACK_VAR CHAR cComma[1]				// The comma, should we not be at the end of the array
+	STACK_VAR INTEGER F1						// Standard FOR loop variable
+	STACK_VAR CHAR cComma[1]					// The comma, should we not be at the end of the array
 	STACK_VAR CHAR cReturn[_JSON_InputSize]		// Temp storage for return variable
 	
 	FOR (F1 = 1; F1 <= jObject.Count; F1++)
@@ -1105,7 +1182,7 @@ DEFINE_FUNCTION CHAR[_JSON_InputSize] JSON_ObjectToString(_JSON_Object jObject)
 		}
 	}
 	
-	cReturn = "'{',13,cReturn,'}',13"
+	cReturn = "'{',13,cReturn,'}'"
 	RETURN cReturn
 }
 
@@ -1114,12 +1191,12 @@ DEFINE_FUNCTION CHAR[_JSON_InputSize] JSON_ArrayToString(_JSON_Array jArray)
 // FUNCTION:	JSON_ArrayToString
 // PURPOSE:  	Output a JSON array with the elements included in the _JSON_Array parameter
 //
-// EXAMPLE:	JSON_ArrayToString(Jarray)
-// RETURNS:	<string containing JSON formatted data>
+// EXAMPLE:		JSON_ArrayToString(jArray)
+// RETURNS:		<string containing JSON formatted data>
 // ---------------------------------------------------------------------------------------------------------------------
 {
-	STACK_VAR INTEGER F1				// Standard FOR loop variable
-	STACK_VAR CHAR cComma[1]				// The comma, should we not be at the end of the array
+	STACK_VAR INTEGER F1						// Standard FOR loop variable
+	STACK_VAR CHAR cComma[1]					// The comma, should we not be at the end of the array
 	STACK_VAR CHAR cReturn[_JSON_InputSize]		// Temp storage for return variable
 	
 	FOR (F1 = 1; F1 <= jArray.Count; F1++)
@@ -1169,11 +1246,11 @@ DEFINE_FUNCTION CHAR[_JSON_InputSize] JSON_ArrayToString(_JSON_Array jArray)
 DEFINE_FUNCTION INTEGER JSON_ClearObject(_JSON_Object jObject)
 // ---------------------------------------------------------------------------------------------------------------------
 // FUNCTION:	JSON_ClearObject
-// PURPOSE:	Clear a _JSON_Object variable of all data, if using a global variable to store data; most of the time you
-//		should be using STACK_VARs which will be destroyed when the code block ends
+// PURPOSE:		Clear a _JSON_Object variable of all data, if using a global variable to store data; most of the time you
+//				should be using STACK_VARs which will be destroyed when the code block ends
 //
-// EXAMPLE:	JSON_ClearObject(jData)
-// RETURNS:	Nothing
+// EXAMPLE:		JSON_ClearObject(jData)
+// RETURNS:		Nothing
 // ---------------------------------------------------------------------------------------------------------------------
 {
 	STACK_VAR INTEGER F1
@@ -1190,14 +1267,14 @@ DEFINE_FUNCTION INTEGER JSON_ClearObject(_JSON_Object jObject)
 DEFINE_FUNCTION CHAR[_JSON_InputSize] NumArrayToJSON(SLONG nArray[],INTEGER nLength)
 // ---------------------------------------------------------------------------------------------------------------------
 // FUNCTION:	NumArrayToJSON
-// PURPOSE:	Input a SLONG, LONG, or INTEGER array and return the JSON string equivalent of the array
+// PURPOSE:		Input a SLONG, LONG, or INTEGER array and return the JSON string equivalent of the array
 //
-// EXAMPLE:	NumArrayToJSON(slArray,5)
-// RETURNS:	'[ 1, 2, 3, 4, 5 ]'
+// EXAMPLE:		NumArrayToJSON(slArray,5)
+// RETURNS:		'[ 1, 2, 3, 4, 5 ]'
 // ---------------------------------------------------------------------------------------------------------------------
 {
-	STACK_VAR INTEGER F1				// Standard FOR loop variable
-	STACK_VAR CHAR cComma[1]				// The comma, should we not be at the end of the array
+	STACK_VAR INTEGER F1						// Standard FOR loop variable
+	STACK_VAR CHAR cComma[1]					// The comma, should we not be at the end of the array
 	STACK_VAR CHAR cReturn[_JSON_InputSize]		// Temp storage for return variable
 	
 	IF (MAX_LENGTH_ARRAY(nArray) < nLength)
@@ -1226,14 +1303,14 @@ DEFINE_FUNCTION CHAR[_JSON_InputSize] NumArrayToJSON(SLONG nArray[],INTEGER nLen
 DEFINE_FUNCTION CHAR[_JSON_InputSize] StringArrayToJSON(CHAR cArray[][],INTEGER nLength)
 // ---------------------------------------------------------------------------------------------------------------------
 // FUNCTION:	StringArrayToJSON
-// PURPOSE:	Input a CHAR array and return the JSON string equivalent of the array
+// PURPOSE:		Input a CHAR array and return the JSON string equivalent of the array
 //
-// EXAMPLE:	StringArrayToJSON(cArray,5)
-// RETURNS:	'[ "Hello", "my", "name", "is", "JSON" ]'
+// EXAMPLE:		StringArrayToJSON(cArray,5)
+// RETURNS:		'[ "Hello", "my", "name", "is", "JSON" ]'
 // ---------------------------------------------------------------------------------------------------------------------
 {
-	STACK_VAR INTEGER F1				// Standard FOR loop variable
-	STACK_VAR CHAR cComma[1]				// The comma, should we not be at the end of the array
+	STACK_VAR INTEGER F1						// Standard FOR loop variable
+	STACK_VAR CHAR cComma[1]					// The comma, should we not be at the end of the array
 	STACK_VAR CHAR cReturn[_JSON_InputSize]		// Temp storage for return variable
 	
 	IF (MAX_LENGTH_ARRAY(cArray) < nLength)
