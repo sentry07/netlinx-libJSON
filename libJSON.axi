@@ -1024,7 +1024,7 @@ DEFINE_FUNCTION SINTEGER JSON_SetValue(_JSON_Object jObject,CHAR cKeyName[],CHAR
 	{
 		IF (LOWER_STRING(jObject.KV[F1].K) = LOWER_STRING(cKeyName))
 		{
-			jObject.KV[F1].V = cValue
+			jObject.KV[F1].V = cValidValue
 			jObject.KV[F1].nType = nType
 			RETURN _JSON_Success
 		}
@@ -1034,14 +1034,14 @@ DEFINE_FUNCTION SINTEGER JSON_SetValue(_JSON_Object jObject,CHAR cKeyName[],CHAR
 	{
 		jObject.Count++
 		jObject.KV[jObject.Count].K = cKeyName
-		jObject.KV[jObject.Count].V = cValue
+		jObject.KV[jObject.Count].V = cValidValue
 		jObject.KV[jObject.Count].nType = nType
 		RETURN _JSON_Success
 	}
 	ELSE
 	{
 		#IF_DEFINED libSystemLog_v1_2_Met
-		SendToLog('JSON',"'JSON_SetValue: Out of memory in JSON object while trying to add ',cKeyName,':',cValue")
+		SendToLog('JSON',"'JSON_SetValue: Out of memory in JSON object while trying to add ',cKeyName,':',cValidValue")
 		#END_IF
 		
 		RETURN _JSON_OutOfMemory
