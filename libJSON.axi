@@ -197,13 +197,297 @@ DEFINE_FUNCTION CHAR[_JSON_InputSize] _JSON_TrimWhiteSpace(CHAR cInput[])
 // JSON Functions
 // ---------------------------------------------------------------------------------------------------------------------
 
+DEFINE_FUNCTION INTEGER JSON_ParseObject (CHAR cInput[],_JSON_Object jObject)
+// ---------------------------------------------------------------------------------------------------------------------
+// FUNCTION: 	JSON_ParseObject
+// PURPOSE:		Replaces the old JSON_ParseObject; acts as a wrapper for the Validate and Parse functions so that we can
+// 				use JSON_ParseValidObject without having to run the validation routine
+//
+// EXAMPLE:		nResult = JSON_ParseObject(cInput,jObject)
+// RETURNS:		1 if valid; cJSON_String is updated with JSON string if found
+//				0 if not valid; cJSON_String is updated with error
+// ---------------------------------------------------------------------------------------------------------------------
+{
+	STACK_VAR INTEGER nReturn							// Return value from JSON_Validate
+	STACK_VAR CHAR cTempInput[_JSON_InputSize]			// Copy cInput so we're not modifying the input parameter
+	STACK_VAR CHAR cValidated[_JSON_InputSize]			// The validated JSON string or error
+
+	cTempInput = cInput
+	nReturn = JSON_Validate(cTempInput,cValidated)		// Check the string to make sure it's valid
+	
+	IF (!nReturn)										// The JSON was not valid; return the error
+	{
+		SEND_STRING 0,"'[JSON] Validator returned the following error: ',cValidated"
+	}
+	ELSE												// The JSON was valid, parse it
+	{
+		JSON_ParseValidObject(cValidated,jObject)
+	}
+}
+
+DEFINE_FUNCTION INTEGER JSON_FindObjectInString(CHAR cInput[],CHAR cJSON_String[])
+// ---------------------------------------------------------------------------------------------------------------------
+// FUNCTION: 	JSON_FindObjectInString
+// PURPOSE:		Traverses a string input to a) verify there is an object in the string and b) return the first valid JSON
+//				string found.
+//
+// EXAMPLE:		nResult = JSON_FindObjectInString(cDeviceBuffer,cJSON_String)
+// RETURNS:		1 if valid; cJSON_String is updated with JSON string if found
+//				0 if not valid; cJSON_String is updated with error
+// ---------------------------------------------------------------------------------------------------------------------
+{
+	STACK_VAR CHAR cTempInput[_JSON_InputSize]		// Temporary string storage
+	STACK_VAR CHAR cTempOutput[_JSON_InputSize]		// Temporary string storage
+	STACK_VAR INTEGER F1							// Loop over bytes in string
+	STACK_VAR INTEGER nFind							// Find location
+	STACK_VAR INTEGER bInKey						// Currently in the key
+	STACK_VAR INTEGER bInValue						// Currently in the value
+	STACK_VAR INTEGER bEndOfValue					// Value should have ended
+	STACK_VAR INTEGER bInObj						// Currently in an object
+	STACK_VAR INTEGER bInArray						// Currently in an array
+	STACK_VAR INTEGER BrObj							// Current number of open object brackets
+	STACK_VAR INTEGER BrArray						// Current number of open array brackets
+	
+	cTempInput = _JSON_TrimWhiteSpace(cInput)
+	F1 = 1
+	
+	WHILE (F1 <= LENGTH_STRING(cTempInput))
+	{
+		SWITCH (cTempInput[F1])
+		{
+			CASE $0D:
+			CASE $0A:
+			CASE $20:
+			CASE $09:
+			{
+				// Ignore, we don't want this in our validated output
+			}
+			CASE '"':
+			{
+				nFind = FIND_STRING(cTempInput,'"',F1+1)
+				IF (nFind)
+				{
+					cTempOutput = "cTempOutput,MID_STRING(cTempInput,F1,nFind-(F1-1))"
+					F1 = nFind
+				}
+				ELSE
+				{
+					cJSON_String = "'ERROR at position ',ITOA(F1),': No string terminator'"
+					RETURN 0
+				}
+			}
+			CASE ':':
+			{
+				cTempOutput = "cTempOutput,cTempInput[F1]"
+				
+				IF (bInKey)				// A : should only occur between the key and value in a pair. If it happens anywhere else not in a string, it's invalid
+				{
+					bInKey = 0
+					bInValue = 1
+				}
+				ELSE
+				{
+					cJSON_String = "'ERROR at position ',ITOA(F1),': Colon in value or invalid position'"
+					RETURN 0
+				}
+			}
+			CASE ',':					// A , should only occur between key:value pairs to separate them, or inside an array to separate values. If it happens anywhere else not in a string, it's invalid
+			{
+				cTempOutput = "cTempOutput,cTempInput[F1]"
+				
+				IF (bInArray)				// This occured inside an array which is valid
+				{
+					// This is fine, ignore it
+				}
+				ELSE IF (bInValue)			// This occurred at the end of the value, transition back to looking for key
+				{
+					bInValue = 0
+					bInKey = 1
+				}
+				ELSE
+				{
+					cJSON_String = "'ERROR at position ',ITOA(F1),': Comma only valid between key:value or array values.'"
+					RETURN 0
+				}
+			}
+			CASE '{':					// Start of object
+			{
+				cTempOutput = "cTempOutput,cTempInput[F1]"
+				BrObj++
+				bInObj = 1
+				bInArray = 0
+				bInKey = 1
+				bInValue = 0
+			}
+			CASE '}':					// End of object
+			{
+				cTempOutput = "cTempOutput,cTempInput[F1]"
+				IF (BrObj)				// Make sure we've entered an object before this point; if not, it's not valid JSON
+				{
+					BrObj--
+					bInObj = 0
+				}
+				ELSE
+				{
+					cJSON_String = "'ERROR at position ',ITOA(F1),': End of object unexpected.'"
+					RETURN 0
+				}
+			}
+			CASE '[':					// Start of array
+			{
+				cTempOutput = "cTempOutput,cTempInput[F1]"
+				IF (bInValue)				// Make sure we're looking at the value of the pair; if not, it's not valid JSON
+				{
+					BrArray++
+					bInArray = 1
+				}
+				ELSE
+				{
+					cJSON_String = "'ERROR at position ',ITOA(F1),': Start of array only valid in value.'"
+					RETURN 0
+				}
+			}
+			CASE ']':
+			{
+				cTempOutput = "cTempOutput,cTempInput[F1]"
+				
+				IF (BrArray)				// Make sure we've entered an array before this point; if not, it's not valid JSON
+				{
+					BrArray--
+					bInArray = 0
+				}
+				ELSE
+				{
+					cJSON_String = "'ERROR at position ',ITOA(F1),': End of array unexpected.'"
+					RETURN 0
+				}
+			}
+			CASE 'T':		// True
+			CASE 't':		// true
+			{
+				IF (bInValue)
+				{
+					IF (LOWER_STRING(MID_STRING(cTempInput,F1,4)) == 'true')
+					{
+						cTempOutput = "cTempOutput,'true'"
+						F1 = F1 + 3
+					}
+					ELSE
+					{
+						cJSON_String = "'ERROR at position ',ITOA(F1),': Unexpected character t.'"
+						RETURN 0
+					}
+				}
+				ELSE
+				{
+					cJSON_String = "'ERROR at position ',ITOA(F1),': Unexpected character t.'"
+					RETURN 0
+				}
+			}
+			CASE 'F':		// False
+			CASE 'f':		// false
+			{
+				IF (bInValue)
+				{
+					IF (LOWER_STRING(MID_STRING(cTempInput,F1,5)) == 'false')
+					{
+						cTempOutput = "cTempOutput,'false'"
+						F1 = F1 + 4
+					}
+					ELSE
+					{
+						cJSON_String = "'ERROR at position ',ITOA(F1),': Unexpected character f.'"
+						RETURN 0
+					}
+				}
+				ELSE
+				{
+					cJSON_String = "'ERROR at position ',ITOA(F1),': Unexpected character f.'"
+					RETURN 0
+				}
+			}
+			CASE 'N':		// Null
+			CASE 'n':		// null
+			{
+				IF (bInValue)
+				{
+					IF (LOWER_STRING(MID_STRING(cTempInput,F1,4)) == 'null')
+					{
+						cTempOutput = "cTempOutput,'null'"
+						F1 = F1 + 3
+					}
+					ELSE
+					{
+						cJSON_String = "'ERROR at position ',ITOA(F1),': Unexpected character n.'"
+						RETURN 0
+					}
+				}
+				ELSE
+				{
+					cJSON_String = "'ERROR at position ',ITOA(F1),': Unexpected character n.'"
+					RETURN 0
+				}
+			}
+			CASE '-':			// Number Value
+			CASE '1':			// Number value
+			CASE '2':			// Number value
+			CASE '3':			// Number value
+			CASE '4':			// Number value
+			CASE '5':			// Number value
+			CASE '6':			// Number value
+			CASE '7':			// Number value
+			CASE '8':			// Number value
+			CASE '9':			// Number value
+			CASE '0':			// Number value
+			{
+				cTempOutput = "cTempOutput,cTempInput[F1]"
+				
+				IF (!bInValue)	// Only time a number outside a string is valid is in the value, also in an array which is in the value
+				{
+					cJSON_String = "'ERROR at position ',ITOA(F1),': Unexpected integer in key.'"
+					RETURN 0
+				}
+			}
+			CASE '.':			// A period is only valid outside a string in a number value
+			{
+				cTempOutput = "cTempOutput,cTempInput[F1]"
+				
+				IF (!bInValue)	// Only time a period outside a string is valid is in the value when it's a number
+				{
+					cJSON_String = "'ERROR at position ',ITOA(F1),': Unexpected period in key.'"
+					RETURN 0
+				}
+			}
+			DEFAULT:
+			{
+				cJSON_String = "'ERROR at position ',ITOA(F1),': Unexpected character.'"
+				RETURN 0
+			}
+		}
+		
+		IF (!BrObj && !BrArray)
+		{
+			cJSON_String = cTempOutput
+			cInput = RIGHT_STRING(cTempInput,LENGTH_STRING(cTempInput) - F1)
+			RETURN 1
+		}
+		ELSE
+		{
+			F1++
+		}
+	}
+
+	cJSON_String = "'End of string. No valid JSON strings found.'"
+	RETURN 0
+}
+
 DEFINE_FUNCTION INTEGER JSON_Validate(CHAR cInput[],CHAR cCleaned[])
 // ---------------------------------------------------------------------------------------------------------------------
 // FUNCTION: 	JSON_Validate
 // PURPOSE:		Parses cInput to validate that it is a valid JSON structure; this also cleans out all unnecessary
 //				whitespace characters and returns the cleaned string in the cCleaned parameter
 //
-// EXAMPLE:		nResult = JSON_Verify(cDeviceBuffer,cValidated)
+// EXAMPLE:		nResult = JSON_Validate(cDeviceBuffer,cValidated)
 // RETURNS:		1 if valid, 0 if not; cValidated is updated with compacted text
 // ---------------------------------------------------------------------------------------------------------------------
 {
@@ -451,10 +735,11 @@ DEFINE_FUNCTION INTEGER JSON_Validate(CHAR cInput[],CHAR cCleaned[])
 	}
 }
 
-DEFINE_FUNCTION INTEGER JSON_ParseObject(CHAR cInput[],_JSON_Object jObject)
+
+DEFINE_FUNCTION INTEGER JSON_ParseValidObject(CHAR cValidJSON[],_JSON_Object jObject)
 // ---------------------------------------------------------------------------------------------------------------------
-// FUNCTION: 	JSON_ParseObject
-// PURPOSE:		Parses cInput and puts the Key:Value pairs in the _JSON_Object that is passed in the second parameter
+// FUNCTION: 	JSON_ParseValidObject
+// PURPOSE:		Parses cValidJSON and puts the Key:Value pairs in the _JSON_Object that is passed in the second parameter
 //
 // EXAMPLE:		nResult = JSON_ParseObject(cDeviceBuffer,jObject)
 // RETURNS:		number of key:value pairs parsed; jObject has the parsed data
@@ -480,221 +765,212 @@ DEFINE_FUNCTION INTEGER JSON_ParseObject(CHAR cInput[],_JSON_Object jObject)
 	STACK_VAR INTEGER BrArrayStart					// Start of the current array
 	STACK_VAR INTEGER nCurrentKV					// Current KV pair we're processing
 	
-	cTempInput = cInput
+	cValidated = cValidJSON
 	
-	nReturn = JSON_Validate(cTempInput,cValidated)		// Check the string to make sure it's valid
-	
-	IF (!nReturn)
+	IF (jObject.Count)
 	{
-		SEND_STRING 0,"'[JSON] Validator returned the following error: ',cValidated"
+		JSON_ClearObject(jObject)
 	}
-	ELSE							// Good to go, start parsing
+	
+	nCurrentKV = 1
+	F1 = 1
+	
+	WHILE (F1 <= LENGTH_STRING(cValidated))			// Loop through string and look at almost every character
 	{
-		IF (jObject.Count)
+		SWITCH (cValidated[F1])
 		{
-			JSON_ClearObject(jObject)
-		}
-		
-		nCurrentKV = 1
-		F1 = 1
-		
-		WHILE (F1 <= LENGTH_STRING(cValidated))			// Loop through string and look at almost every character
-		{
-			SWITCH (cValidated[F1])
+			CASE '"':
 			{
-				CASE '"':
+				IF (!bInChildObj && !bInArray)				// Looking for strings in either the Key position, or single string values in the Value position
 				{
-					IF (!bInChildObj && !bInArray)				// Looking for strings in either the Key position, or single string values in the Value position
+					nFind = FIND_STRING(cValidated,'"',F1+1)
+					cTemp = MID_STRING(cValidated,F1+1,nFind-(F1+1))
+					IF (bInKey)
 					{
-						nFind = FIND_STRING(cValidated,'"',F1+1)
-						cTemp = MID_STRING(cValidated,F1+1,nFind-(F1+1))
-						IF (bInKey)
+						IF (LENGTH_STRING(jReturn.KV[nCurrentKV].K))	// If we've already set a key name in the current index, increment the index; this is where we move to the next K:V pair
 						{
-							IF (LENGTH_STRING(jReturn.KV[nCurrentKV].K))	// If we've already set a key name in the current index, increment the index; this is where we move to the next K:V pair
-							{
-								nCurrentKV++
-							}
-							jReturn.KV[nCurrentKV].K = cTemp
+							nCurrentKV++
 						}
-						ELSE IF (bInValue && !bInArray && !bInChildObj)
-						{
-							jReturn.KV[nCurrentKV].V = cTemp
-							jReturn.KV[nCurrentKV].nType = _JSON_IsString
-						}
-						F1 = nFind
+						jReturn.KV[nCurrentKV].K = cTemp
 					}
-				}
-				CASE ':':
-				{
-					IF (!bInChildObj && !bInArray)		// Child
+					ELSE IF (bInValue && !bInArray && !bInChildObj)
 					{
-						IF (bInKey)				// A : should only occur between the key and value in a pair. If it happens anywhere else not in a string, it's invalid
-						{
-							bInKey = 0
-							bInValue = 1
-						}
-						ELSE
-						{
-							RETURN 0
-						}
-					}
-				}
-				CASE ',':					// A , should only occur between key:value pairs to separate them, or inside an array to separate values. If it happens anywhere else not in a string, it's invalid
-				{
-					IF (!bInChildObj && !bInArray)
-					{
-						bInValue = 0
-						bInKey = 1
-					}
-				}
-				CASE '{':					// Start of object
-				{
-					IF (nJSONDebug) SEND_STRING 0,"'[JSON] I see a { at ',ITOA(F1),' (bInArray: ',ITOA(bInArray),', bInChildObj: ',ITOA(bInChildObj),')'"
-					IF (!bInArray)
-					{
-						IF (bInChildObj)
-						{
-							BrChildObj++
-						}
-						ELSE
-						{
-							IF (bInValue)
-							{
-								BrChildObj++			// This will cause all data to get copied to the value of the current key until we reach the end of the current object
-								nChildObjStart = F1
-								bInChildObj = 1
-							}
-							ELSE
-							{
-								BrObj++
-								BrChildObj = 0
-								bInObj = 1
-								bInArray = 0
-								bInKey = 1
-								bInValue = 0
-							}
-						}
-					}
-				}
-				CASE '}':					// End of object
-				{
-					IF (nJSONDebug) SEND_STRING 0,"'[JSON] I see a } at ',ITOA(F1),' (bInArray: ',ITOA(bInArray),', bInChildObj: ',ITOA(bInChildObj),')'"
-					IF (!bInArray)
-					{
-						IF (bInChildObj)
-						{
-							BrChildObj --
-							IF (BrChildObj == 0)			// This is the end of the child object
-							{
-								nFind = F1
-								jReturn.KV[nCurrentKV].nType = _JSON_IsObject
-								jReturn.KV[nCurrentKV].V = MID_STRING(cValidated,nChildObjStart,nFind-(nChildObjStart-1))
-								nChildObjStart = 0
-								bInChildObj = 0
-							}
-						}
-						ELSE IF (BrObj)				// Make sure we've entered a object before this point; if not, it's not valid JSON
-						{
-							BrObj--
-							bInObj = 0
-						}
-					}
-				}
-				CASE '[':						// Start of array
-				{
-					IF (nJSONDebug) SEND_STRING 0,"'[JSON] I see a [ at ',ITOA(F1),' (bInArray: ',ITOA(bInArray),', bInChildObj: ',ITOA(bInChildObj),')'"
-					IF (!bInChildObj)
-					{
-						BrArray++
-						bInArray = 1
-						IF (BrArray == 1)				// Outer array
-						{
-							BrArrayStart = F1
-						}
-						IF (nJSONDebug) SEND_STRING 0,"'[JSON] Array start at ',ITOA(F1),': BrArray: ',ITOA(BrArray),', BrArrayStart: ',ITOA(BrArrayStart)"
-					}
-				}
-				CASE ']':						// End of Array
-				{
-					IF (nJSONDebug) SEND_STRING 0,"'[JSON] I see a ] at ',ITOA(F1),' (bInArray: ',ITOA(bInArray),', bInChildObj: ',ITOA(bInChildObj),')'"
-					IF (!bInChildObj)
-					{
-						BrArray--
-						IF (nJSONDebug) SEND_STRING 0,"'[JSON] Array stop at ',ITOA(F1),': BrArray: ',ITOA(BrArray),', BrArrayStart: ',ITOA(BrArrayStart)"
-						IF (BrArray == 0)
-						{
-							nFind = F1
-							jReturn.KV[nCurrentKV].V = MID_STRING(cValidated,BrArrayStart,nFind-(BrArrayStart-1))
-							jReturn.KV[nCurrentKV].nType = _JSON_IsArray
-							BrArrayStart = 0
-							bInArray = 0
-						}
-					}
-				}
-				CASE 't':		// true
-				{
-					IF (!bInChildObj && !bInArray)
-					{
-						jReturn.KV[nCurrentKV].nType = _JSON_IsBool
-						jReturn.KV[nCurrentKV].V = 'true'
-						F1 = F1 + 3
-					}
-				}
-				CASE 'f':		// false
-				{
-					IF (!bInChildObj && !bInArray)
-					{
-						jReturn.KV[nCurrentKV].nType = _JSON_IsBool
-						jReturn.KV[nCurrentKV].V = 'false'
-						F1 = F1 + 4
-					}
-				}
-				CASE 'n':		// null
-				{
-					IF (!bInChildObj && !bInArray)
-					{
-						jReturn.KV[nCurrentKV].nType = _JSON_IsNull
-						jReturn.KV[nCurrentKV].V = 'null'
-						F1 = F1 + 3
-					}
-				}
-				CASE '-':			// Number value
-				CASE '1':			// Number value
-				CASE '2':			// Number value
-				CASE '3':			// Number value
-				CASE '4':			// Number value
-				CASE '5':			// Number value
-				CASE '6':			// Number value
-				CASE '7':			// Number value
-				CASE '8':			// Number value
-				CASE '9':			// Number value
-				CASE '0':			// Number value
-				{
-					IF (!bInChildObj && !bInArray && bInValue)
-					{
-						nFind = FIND_STRING(cValidated,',',F1)			// Find end of number by finding the end of the K:V pair
-						IF (!nFind)
-						{
-							nFind = LENGTH_STRING(cValidated) + 1		// Simulate finding the comma after the end of the string
-						}
-						cTemp = MID_STRING(cValidated,F1,nFind-F1)
-						jReturn.KV[nCurrentKV].nType = _JSON_IsNumber
 						jReturn.KV[nCurrentKV].V = cTemp
-						F1 = nFind
-						bInValue = 0
-						bInKey = 1
+						jReturn.KV[nCurrentKV].nType = _JSON_IsString
+					}
+					F1 = nFind
+				}
+			}
+			CASE ':':
+			{
+				IF (!bInChildObj && !bInArray)		// Child
+				{
+					IF (bInKey)				// A : should only occur between the key and value in a pair. If it happens anywhere else not in a string, it's invalid
+					{
+						bInKey = 0
+						bInValue = 1
+					}
+					ELSE
+					{
+						RETURN 0
 					}
 				}
 			}
-			
-			F1++
+			CASE ',':					// A , should only occur between key:value pairs to separate them, or inside an array to separate values. If it happens anywhere else not in a string, it's invalid
+			{
+				IF (!bInChildObj && !bInArray)
+				{
+					bInValue = 0
+					bInKey = 1
+				}
+			}
+			CASE '{':					// Start of object
+			{
+				IF (nJSONDebug) SEND_STRING 0,"'[JSON] I see a { at ',ITOA(F1),' (bInArray: ',ITOA(bInArray),', bInChildObj: ',ITOA(bInChildObj),')'"
+				IF (!bInArray)
+				{
+					IF (bInChildObj)
+					{
+						BrChildObj++
+					}
+					ELSE
+					{
+						IF (bInValue)
+						{
+							BrChildObj++			// This will cause all data to get copied to the value of the current key until we reach the end of the current object
+							nChildObjStart = F1
+							bInChildObj = 1
+						}
+						ELSE
+						{
+							BrObj++
+							BrChildObj = 0
+							bInObj = 1
+							bInArray = 0
+							bInKey = 1
+							bInValue = 0
+						}
+					}
+				}
+			}
+			CASE '}':					// End of object
+			{
+				IF (nJSONDebug) SEND_STRING 0,"'[JSON] I see a } at ',ITOA(F1),' (bInArray: ',ITOA(bInArray),', bInChildObj: ',ITOA(bInChildObj),')'"
+				IF (!bInArray)
+				{
+					IF (bInChildObj)
+					{
+						BrChildObj --
+						IF (BrChildObj == 0)			// This is the end of the child object
+						{
+							nFind = F1
+							jReturn.KV[nCurrentKV].nType = _JSON_IsObject
+							jReturn.KV[nCurrentKV].V = MID_STRING(cValidated,nChildObjStart,nFind-(nChildObjStart-1))
+							nChildObjStart = 0
+							bInChildObj = 0
+						}
+					}
+					ELSE IF (BrObj)				// Make sure we've entered a object before this point; if not, it's not valid JSON
+					{
+						BrObj--
+						bInObj = 0
+					}
+				}
+			}
+			CASE '[':						// Start of array
+			{
+				IF (nJSONDebug) SEND_STRING 0,"'[JSON] I see a [ at ',ITOA(F1),' (bInArray: ',ITOA(bInArray),', bInChildObj: ',ITOA(bInChildObj),')'"
+				IF (!bInChildObj)
+				{
+					BrArray++
+					bInArray = 1
+					IF (BrArray == 1)				// Outer array
+					{
+						BrArrayStart = F1
+					}
+					IF (nJSONDebug) SEND_STRING 0,"'[JSON] Array start at ',ITOA(F1),': BrArray: ',ITOA(BrArray),', BrArrayStart: ',ITOA(BrArrayStart)"
+				}
+			}
+			CASE ']':						// End of Array
+			{
+				IF (nJSONDebug) SEND_STRING 0,"'[JSON] I see a ] at ',ITOA(F1),' (bInArray: ',ITOA(bInArray),', bInChildObj: ',ITOA(bInChildObj),')'"
+				IF (!bInChildObj)
+				{
+					BrArray--
+					IF (nJSONDebug) SEND_STRING 0,"'[JSON] Array stop at ',ITOA(F1),': BrArray: ',ITOA(BrArray),', BrArrayStart: ',ITOA(BrArrayStart)"
+					IF (BrArray == 0)
+					{
+						nFind = F1
+						jReturn.KV[nCurrentKV].V = MID_STRING(cValidated,BrArrayStart,nFind-(BrArrayStart-1))
+						jReturn.KV[nCurrentKV].nType = _JSON_IsArray
+						BrArrayStart = 0
+						bInArray = 0
+					}
+				}
+			}
+			CASE 't':		// true
+			{
+				IF (!bInChildObj && !bInArray)
+				{
+					jReturn.KV[nCurrentKV].nType = _JSON_IsBool
+					jReturn.KV[nCurrentKV].V = 'true'
+					F1 = F1 + 3
+				}
+			}
+			CASE 'f':		// false
+			{
+				IF (!bInChildObj && !bInArray)
+				{
+					jReturn.KV[nCurrentKV].nType = _JSON_IsBool
+					jReturn.KV[nCurrentKV].V = 'false'
+					F1 = F1 + 4
+				}
+			}
+			CASE 'n':		// null
+			{
+				IF (!bInChildObj && !bInArray)
+				{
+					jReturn.KV[nCurrentKV].nType = _JSON_IsNull
+					jReturn.KV[nCurrentKV].V = 'null'
+					F1 = F1 + 3
+				}
+			}
+			CASE '-':			// Number value
+			CASE '1':			// Number value
+			CASE '2':			// Number value
+			CASE '3':			// Number value
+			CASE '4':			// Number value
+			CASE '5':			// Number value
+			CASE '6':			// Number value
+			CASE '7':			// Number value
+			CASE '8':			// Number value
+			CASE '9':			// Number value
+			CASE '0':			// Number value
+			{
+				IF (!bInChildObj && !bInArray && bInValue)
+				{
+					nFind = FIND_STRING(cValidated,',',F1)			// Find end of number by finding the end of the K:V pair
+					IF (!nFind)
+					{
+						nFind = LENGTH_STRING(cValidated) + 1		// Simulate finding the comma after the end of the string
+					}
+					cTemp = MID_STRING(cValidated,F1,nFind-F1)
+					jReturn.KV[nCurrentKV].nType = _JSON_IsNumber
+					jReturn.KV[nCurrentKV].V = cTemp
+					F1 = nFind
+					bInValue = 0
+					bInKey = 1
+				}
+			}
 		}
 		
-		IF (nJSONDebug) SEND_STRING 0,"'[JSON] ',ITOA(F1),' bytes parsed.'"
-		jReturn.Count = nCurrentKV
-		jObject = jReturn
-		RETURN nCurrentKV
+		F1++
 	}
+	
+	IF (nJSONDebug) SEND_STRING 0,"'[JSON] ',ITOA(F1),' bytes parsed.'"
+	jReturn.Count = nCurrentKV
+	jObject = jReturn
+	RETURN nCurrentKV
 }
 
 DEFINE_FUNCTION INTEGER JSON_ParseArray(CHAR cInput[],_JSON_Array jReturn)
