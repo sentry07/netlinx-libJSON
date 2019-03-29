@@ -65,8 +65,10 @@ PROGRAM_NAME='libJSON v2_0'
 // ---------------------------------------------------------------------------------------------------------------------
 // Functions:
 //	DEFINE_FUNCTION CHAR[] 		_JSON_TrimWhiteSpace	(CHAR cInput[])
-//	DEFINE_FUNCTION INTEGER 	JSON_Validate			(CHAR cInput[],CHAR cCleaned[])
+//	DEFINE_FUNCTION INTEGER 	JSON_FindObjectInString	(CHAR cInput[],CHAR cJSON_String[])
 //	DEFINE_FUNCTION INTEGER 	JSON_ParseObject		(CHAR cInput[],_JSON_Object jObject)
+//	DEFINE_FUNCTION INTEGER 	JSON_Validate			(CHAR cInput[],CHAR cCleaned[])
+//	DEFINE_FUNCTION INTEGER 	JSON_ParseValidObject	(CHAR cInput[],_JSON_Object jObject)
 //	DEFINE_FUNCTION INTEGER 	JSON_ParseArray			(CHAR cInput[],_JSON_Array jReturn)
 //	DEFINE_FUNCTION INTEGER 	JSON_HasKey				(_JSON_Object jObject,CHAR cKeyName[])
 //	DEFINE_FUNCTION CHAR[] 		JSON_GetValue			(_JSON_Object jObject,CHAR cKeyName[])
@@ -218,10 +220,12 @@ DEFINE_FUNCTION INTEGER JSON_ParseObject (CHAR cInput[],_JSON_Object jObject)
 	IF (!nReturn)										// The JSON was not valid; return the error
 	{
 		SEND_STRING 0,"'[JSON] Validator returned the following error: ',cValidated"
+		RETURN 0
 	}
 	ELSE												// The JSON was valid, parse it
 	{
-		JSON_ParseValidObject(cValidated,jObject)
+		nReturn = JSON_ParseValidObject(cValidated,jObject)
+		RETURN nReturn
 	}
 }
 
