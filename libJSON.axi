@@ -956,7 +956,7 @@ DEFINE_FUNCTION INTEGER JSON_ParseValidObject(CHAR cValidJSON[],_JSON_Object jOb
 					nFind = FIND_STRING(cValidated,',',F1)			// Find end of number by finding the end of the K:V pair
 					IF (!nFind)
 					{
-						nFind = LENGTH_STRING(cValidated) + 1		// Simulate finding the comma after the end of the string
+						nFind = LENGTH_STRING(cValidated)		// Object should end with a } so don't grab that
 					}
 					cTemp = MID_STRING(cValidated,F1,nFind-F1)
 					jReturn.KV[nCurrentKV].nType = _JSON_IsNumber
