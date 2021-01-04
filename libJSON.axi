@@ -1,7 +1,7 @@
 PROGRAM_NAME='libJSON v2_0'
 // ---------------------------------------------------------------------------------------------------------------------
 // LIBRARY:	libJSON
-// AUTHOR:	https://github.com/sentry07
+// AUTHOR:	eric@statuscontrols.com
 // PURPOSE:	To provide functions to verify, parse, and build JSON encoded objects
 //
 // THIS LIBRARY RELIES ON THE FACT THAT FUNCTION PARAMETERS ARE BYREF, SO MOST DATA IS RETURNED THROUGH PARAMETERS
@@ -93,8 +93,8 @@ CHAR JSON_WhiteSpace[] 		= { $20, $0D, $0A, $09 }	// Space literal, CR, LF, Tab
 // JSON Object size constants
 // ---------------------------------------------------------------------------------------------------------------------
 INTEGER _JSON_InputSize		= 20000			// Size of buffer for JSON string
-INTEGER _JSON_MaxPairs		= 30			// Max number of Key:Value pairs in the _JSON_Object Structure; adjust this if you get OutOfMemory error
-INTEGER _JSON_KeySize		= 20			// String size for all Keys
+INTEGER _JSON_MaxPairs		= 50			// Max number of Key:Value pairs in the _JSON_Object Structure; adjust this if you get OutOfMemory error
+INTEGER _JSON_KeySize		= 50			// String size for all Keys
 INTEGER _JSON_ValueSize		= 2000			// String size for all Values
 INTEGER _JSON_ArraySize		= 64			// Max number of values in _JSON_Array
 
@@ -956,7 +956,7 @@ DEFINE_FUNCTION INTEGER JSON_ParseValidObject(CHAR cValidJSON[],_JSON_Object jOb
 					nFind = FIND_STRING(cValidated,',',F1)			// Find end of number by finding the end of the K:V pair
 					IF (!nFind)
 					{
-						nFind = LENGTH_STRING(cValidated)		// Object should end with a } so don't grab that
+						nFind = LENGTH_STRING(cValidated)   		// Object should end with a } so don't grab that
 					}
 					cTemp = MID_STRING(cValidated,F1,nFind-F1)
 					jReturn.KV[nCurrentKV].nType = _JSON_IsNumber
@@ -993,19 +993,22 @@ DEFINE_FUNCTION INTEGER JSON_ParseArray(CHAR cInput[],_JSON_Array jReturn)
 	STACK_VAR CHAR cTempInput[_JSON_ValueSize]		// Trimmed copy of the input array
 	STACK_VAR _JSON_Array jTempArray				// Temporary array to store the values
 	STACK_VAR INTEGER nValueCount					// Number of values found so far in array
+    STACK_VAR INTEGER bInObj						// Currently in an object
 	STACK_VAR INTEGER bInChildObj					// Currently in a child object
 	STACK_VAR INTEGER bInArray						// Currently in an array
+	STACK_VAR INTEGER BrObj							// Current number of open object brackets
 	STACK_VAR INTEGER BrChildObj					// Current number of open child object brackets
 	STACK_VAR INTEGER nChildObjStart				// Start of the current child object
 	STACK_VAR INTEGER BrArray						// Current number of open array brackets
 	STACK_VAR INTEGER BrArrayStart					// Start of the current array
-	
+
 	// Clean up unnecessary whitespace around array
 	cTempInput = _JSON_TrimWhiteSpace(cInput)
 	
 	// Make sure it's an array
 	IF (!(LEFT_STRING(cTempInput,1) == '[' && RIGHT_STRING(cTempInput,1) == ']'))
 	{
+        SEND_STRING 0,"'[JSON] Array not enclosed in brackets.'"
 		RETURN 0
 	}
 	
@@ -1051,9 +1054,16 @@ DEFINE_FUNCTION INTEGER JSON_ParseArray(CHAR cInput[],_JSON_Array jReturn)
 				IF (nJSONDebug) SEND_STRING 0,"'[JSON] I see a { at ',ITOA(F1),' (bInArray: ',ITOA(bInArray),', bInChildObj: ',ITOA(bInChildObj),')'"
 				IF (!bInArray)
 				{
-					BrChildObj++				// This will cause all data to get copied to the value of the current key until we reach the end of the current object
-					nChildObjStart = F1
-					bInChildObj = 1
+					IF (bInChildObj)
+					{
+						BrChildObj++
+					}
+					ELSE
+					{
+                        BrChildObj++			// This will cause all data to get copied to the value of the current key until we reach the end of the current object
+                        nChildObjStart = F1
+                        bInChildObj = 1
+					}
 				}
 			}
 			CASE '}':						// End of object
@@ -1067,7 +1077,7 @@ DEFINE_FUNCTION INTEGER JSON_ParseArray(CHAR cInput[],_JSON_Array jReturn)
 						nFind = F1
 						jTempArray.List[nValueCount].nType = _JSON_IsObject
 						jTempArray.List[nValueCount].Value = MID_STRING(cTempInput,nChildObjStart,nFind-(nChildObjStart-1))
-						nChildObjStart = 0
+                        nChildObjStart = 0
 						bInChildObj = 0
 					}
 				}
