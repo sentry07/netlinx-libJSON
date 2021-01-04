@@ -1,7 +1,7 @@
 PROGRAM_NAME='libJSON v2_0'
 // ---------------------------------------------------------------------------------------------------------------------
 // LIBRARY:	libJSON
-// AUTHOR:	eric@statuscontrols.com
+// AUTHOR:	sentry07@gmail.com
 // PURPOSE:	To provide functions to verify, parse, and build JSON encoded objects
 //
 // THIS LIBRARY RELIES ON THE FACT THAT FUNCTION PARAMETERS ARE BYREF, SO MOST DATA IS RETURNED THROUGH PARAMETERS
